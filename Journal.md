@@ -19,3 +19,7 @@ I then created the case in fusion 360, after a few iterations going for this sla
 
 Today I wrote the arduino sketch for the project which was the most time consuming and difficult part. I need to wait for the lcd display to arrive to be able to test everything properly but I used some random arduino tutorials for different modules to create this sketch which i think should work. I also spent a while finding models of electronic components to put into the CAD of the case, importing everything into blender. I  wasn't able to get a render of the clock as my laptop isnt powerful enough but got this which shows roughly where each component will go.due to some weird scaling issues it looks like some of the components dont fit properly or clip through the model but they will fit properly in real life. Peformance issues on my laptop also made blender very difficult to work with.
 ![alt text](Images/image-2.png)
+
+# Day 3 (4/8) ~ 1 hour
+With the review feedback I created this wiring diagram and got a few more angle sof the cad for the readme. I also filleted the edges of the case to make it less angular and more asthetically pleasing. Finally I updated the cad files in the repo.
+![alt text](Images/image-3.png)
