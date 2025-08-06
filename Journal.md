@@ -5,7 +5,7 @@ description: "PuzleClock is an alarm clock that makes you solve a puzzle to disa
 created_at: "2024-03-20"
 ---
 
-Total time: ~10 hours
+Total time: ~14 hours
 
 
 # Day 1 (30/7) ~4 hours
@@ -23,3 +23,9 @@ Today I wrote the arduino sketch for the project which was the most time consumi
 # Day 3 (4/8) ~ 1 hour
 With the review feedback I created this wiring diagram and got a few more angle sof the cad for the readme. I also filleted the edges of the case to make it less angular and more asthetically pleasing. Finally I updated the cad files in the repo.
 ![alt text](Images/image-3.png)
+
+# Day 4 (6/8) ~3 hours
+I redesigned the entire case to make it more accessible and printable. I also imported all of the components from grabcad into fusion360 so the project can be better visualised. I also removed the rotary encoder as it is kind of redundant as we can use the joystick to navigate menus.
+![alt text](Images/image-7.png)
+![alt text](Images/image-8.png)
+![alt text](Images/image-9.png)
