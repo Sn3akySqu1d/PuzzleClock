@@ -1,6 +1,6 @@
 PuzzleClock is an alarm clock that makes you actually get out of bed. It makes you solve a random puzzle or game to disable the alarm and uses an ultrasonic sensor to detect if you try to return to bed instead of getting up. It is easy to build with an arduino uno and a few modules. It uses a rotary encoder, joystick, 128x64 lcd display, rtc module, ultrasonic sensor and passive buzzer. It can be powered through usb 2.0 or via a 9v battery.
 
-
+![alt text](Images/image-10.png)
 ![alt text](Images/image-7.png)
 ![alt text](Images/image-8.png)
 ![alt text](Images/image-9.png)

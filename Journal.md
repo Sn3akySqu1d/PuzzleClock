@@ -5,7 +5,8 @@ description: "PuzleClock is an alarm clock that makes you solve a puzzle to disa
 created_at: "2024-03-20"
 ---
 
-Total time: ~14 hours
+Total Design time: ~14 hours
+Total Build time ~3 hours
 
 
 # Day 1 (30/7) ~4 hours
@@ -29,3 +30,11 @@ I redesigned the entire case to make it more accessible and printable. I went fo
 ![alt text](Images/image-7.png)
 ![alt text](Images/image-8.png)
 ![alt text](Images/image-9.png)
+
+# Build -----------------------------------------------------------------
+# 7/8 ~3 hours
+Firstly I tested each component induvidually on a breadboard to make sure they were working. I soldered header pins to the LCD display and it took me a while to get the display to work as there aren't many tutorials online for this specific model. After a while I realised that there were seperate backlight throughholes on the right edge of the board and that the actual backlight pins on the main section actually dont do anything. ![alt text](Images/image-11.png). The firmware worked pretty well but I had to switch from using an arduino uno to an arduino mega as the uno doesnt have enough ram to run the whole program but the mega does. In the future i think ill swap this for an esp32 as that has enough ram and is smaller so will save space in the case. I had to make the case bigger to fit the mega. Additionally, the pcb on the displayw as larger than that on the 3d model so I had to make the case slightly taller and deeper so that it doesnt knock into the joystick pcb.
+![alt text](Images/image-13.png)  
+ I then printed the case, fixed in the lcd screen and screwed the lid to the case with the m3 screws, had to rewire a few times whiel putting everything in the case and retested the firmware to complete the physical build. I also updated the images in the repo and the CAD files, although also kept the old design as i think most 128 x64 lcs modules are the smaller variant so would be compatible with the old cad. In the future  I might swap out the mega with an esp32 to save space in the case aswell as that has enough dynamic memory for the sketch (uno doesnt).
+![alt text](Images/image-12.png)
+![alt text](Images/image-10.png)

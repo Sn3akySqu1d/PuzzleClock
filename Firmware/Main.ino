@@ -1,271 +1,531 @@
 #include <Wire.h>
-#include <RTClib.h>
 #include <U8g2lib.h>
-#include <Encoder.h>
+#include <RTClib.h>
 #include <DHT.h>
 
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0);
-RTC_DS3231 rtc;
+U8G2_ST7920_128X64_F_SW_SPI display(U8G2_R2, 13, 11, 10);
 
 #define DHTPIN 7
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-Encoder menuEnc(2, 3);
-#define ENCODER_BTN 4
+RTC_DS3231 rtc;
+DateTime now;
 
 #define JOY_X A0
 #define JOY_Y A1
-#define JOY_BTN 8
-
-#define TRIG_PIN 5
-#define ECHO_PIN 6
+#define JOY_SW 8
+int xVal, yVal;
+bool swState, buttonPressed = false;
+unsigned long lastButtonTime = 0;
+const unsigned long debounceDelay = 200;
 
 #define BUZZER_PIN 9
 
-int alarmHour = 7, alarmMinute = 30;
-bool alarmActive = false, puzzleSolved = false, waitingForReturn = false;
-unsigned long alarmTriggerTime = 0, returnCheckWindow = 30000;
+#define ULTRASONIC_TRIG 6
+#define ULTRASONIC_ECHO 5
+long lastAwayTime = 0;
+bool userAway = false;
+const unsigned long awayTimeout = 60000; // 1 minute after alarm to watch for return
 
-int menuIndex = 0;
-String menuItems[] = {"Show Time", "Set Alarm", "Game Mode"};
-const int menuSize = 3;
-bool inMenu = true;
+// --- Alarm ---
+int alarmHour = 22, alarmMinute = 9;
+bool alarmActive = false;
+bool inAlarmTimeSetting = false;
+bool settingHours = true;
 
-int currentGame = 0;
-bool gameActive = false;
-bool gameStarted = false;
-bool gameFailed = false;
+enum MainMenuOptions { MENU_CLOCK, MENU_ALARM, MENU_GAMES };
+int mainMenuIndex = 0;
+const int mainMenuItems = 3;
+
+enum AlarmMenuOptions { ALARM_SET_TIME, ALARM_BACK };
+int alarmMenuIndex = 0;
+const int alarmMenuItems = 2;
+
+enum GamesMenuOptions { GAME_MATH, GAME_DODGE, GAME_MAZE, GAME_BACK };
+int gamesMenuIndex = 0;
+const int gamesMenuItems = 4;
+
+bool inMainMenu = false;
+bool inAlarmMenu = false;
+bool inGamesMenu = false;
+
+float temp = 0, humidity = 0;
+
+enum AlarmGame { NONE, MATH, DODGE, MAZE};
+AlarmGame currentAlarmGame = NONE;
+bool gameCompleted = false;
+
+int mathNum1, mathNum2, mathAnswer, mathUserAnswer, mathStage = 0;
+
+const int maxDodgeBlocks = 3;
+int dodgePlayerX = 7;
+int dodgeObstacleX[maxDodgeBlocks];
+int dodgeObstacleY[maxDodgeBlocks];
+int dodgeScore = 0;
+unsigned long dodgeLastMove = 0;
+const int dodgeScoreToWin = 15;
+
+const int mazeWidth = 7;
+const int mazeHeight = 7;
+const char mazeMap[mazeHeight][mazeWidth+1] = {
+  "#######",
+  "#     #",
+  "# ### #",
+  "# #   #",
+  "# # ###",
+  "#     #",
+  "#######"
+};
+int mazePlayerX = 1, mazePlayerY = 1;
+int mazeGoalX = 5, mazeGoalY = 5;
 
 void setup() {
   Serial.begin(9600);
-  Wire.begin();
+  dht.begin();
   rtc.begin();
   if (rtc.lostPower()) rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
-  dht.begin();
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(ENCODER_BTN, INPUT_PULLUP);
-  pinMode(JOY_BTN, INPUT_PULLUP);
-
   display.begin();
-  display.setFont(u8g2_font_6x12_tf);
+  display.setFont(u8g2_font_ncenB08_tr);
+
+  pinMode(JOY_SW, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  pinMode(ULTRASONIC_TRIG, OUTPUT);
+  pinMode(ULTRASONIC_ECHO, INPUT);
+
+  randomSeed(analogRead(A2));
 }
 
 void loop() {
-  DateTime now = rtc.now();
+  now = rtc.now();
 
-  if (inMenu) {
-    handleMenu();
-  } else {
-    if (menuIndex == 0) {
-      showClockScreen(now);
-    } else if (menuIndex == 1) {
-      setAlarmScreen();
-    } else if (menuIndex == 2) {
-      gameLoop();
-    }
-  }
-
-  if (now.hour() == alarmHour && now.minute() == alarmMinute && !alarmActive && !puzzleSolved) {
-    alarmActive = true;
-    alarmTriggerTime = millis();
-    currentGame = (now.day() + now.month()) % 3;
-    gameActive = true;
-    gameStarted = false;
-    gameFailed = false;
-  }
-
-  if (alarmActive && gameActive && !puzzleSolved) {
-    tone(BUZZER_PIN, 1000);
-
-    if (!gameStarted) {
-      display.clearBuffer();
-      display.setCursor(0, 20);
-      display.print("Alarm! Press encoder btn");
-      display.setCursor(0, 40);
-      display.print("to start game");
-      display.sendBuffer();
-      if (digitalRead(ENCODER_BTN) == LOW) {
-        gameStarted = true;
-        delay(300);
-      }
-    } else if (gameFailed) {
-      display.clearBuffer();
-      display.setCursor(0, 20);
-      display.print("You Lost!");
-      display.setCursor(0, 40);
-      display.print("Press encoder btn to retry");
-      display.sendBuffer();
-      if (digitalRead(ENCODER_BTN) == LOW) {
-        delay(300);
-        currentGame = (currentGame + 1) % 3;
-        gameFailed = false;
-        gameStarted = false;
-      }
-    } else {
-      if (currentGame == 0) mathsGame();
-      else if (currentGame == 1) dodgeGame();
-      else if (currentGame == 2) mazeGame();
-    }
-  }
-
-  if (puzzleSolved && millis() - alarmTriggerTime < returnCheckWindow) {
-    if (readDistance() < 50) {
-      puzzleSolved = false;
-      alarmActive = false;
-      gameActive = false;
-      gameStarted = false;
-    }
-  }
-}
-
-void handleMenu() {
-  long pos = menuEnc.read() / 4;
-  menuIndex = constrain(pos % menuSize, 0, menuSize - 1);
-  display.clearBuffer();
-  display.setCursor(0, 10);
-  display.print("-- Menu --");
-  for (int i = 0; i < menuSize; i++) {
-    display.setCursor(0, 25 + i * 10);
-    if (i == menuIndex) display.print("> ");
-    else display.print("  ");
-    display.print(menuItems[i]);
-  }
-  display.sendBuffer();
-
-  if (digitalRead(ENCODER_BTN) == LOW) {
-    delay(300);
-    inMenu = false;
-    menuEnc.write(0);
-  }
-}
-
-void showClockScreen(DateTime now) {
-  float t = dht.readTemperature();
   float h = dht.readHumidity();
-  display.clearBuffer();
-  display.setCursor(0, 12);
-  display.printf("Time: %02d:%02d:%02d", now.hour(), now.minute(), now.second());
-  display.setCursor(0, 24);
-  display.printf("Alarm: %02d:%02d", alarmHour, alarmMinute);
-  display.setCursor(0, 36);
-  display.printf("Temp: %.1fC", t);
-  display.setCursor(0, 48);
-  display.printf("Hum: %.0f%%", h);
-  display.sendBuffer();
+  float t = dht.readTemperature();
 
-  if (digitalRead(ENCODER_BTN) == LOW) {
-    delay(300);
-    inMenu = true;
+  // Only update if valid readings
+  if (!isnan(h) && !isnan(t)) {
+    humidity = h;
+    temp = t;
   }
+
+  readJoystick();
+
+  if (alarmActive && currentAlarmGame == NONE) {
+    currentAlarmGame = static_cast<AlarmGame>(random(1, 4));
+    resetGameVars(currentAlarmGame);
+    gameCompleted = false;
+    tone(BUZZER_PIN, 1000);
+    lastAwayTime = millis();
+    userAway = false;
+  }
+
+  if (alarmActive) {
+    long dist = readUltrasonicDistance();
+    if (!userAway && dist > 50) {
+      userAway = true;
+      lastAwayTime = millis();
+    }
+    if (userAway && dist < 30 && millis() - lastAwayTime < awayTimeout) {
+      currentAlarmGame = NONE;
+      alarmActive = false;
+      noTone(BUZZER_PIN);
+      delay(200);
+      alarmActive = true;
+      return;
+    }
+  }
+
+  if (alarmActive && !gameCompleted) {
+    playAlarmGame();
+  } else if (currentAlarmGame != NONE && gameCompleted) {
+    noTone(BUZZER_PIN);
+    alarmActive = false;
+    currentAlarmGame = NONE;
+    inGamesMenu = false;
+    inAlarmTimeSetting = false;
+    inAlarmMenu = false;
+    inMainMenu = true;
+  } else {
+    if (inMainMenu) drawMainMenu();
+    else if (inAlarmMenu) drawAlarmMenu();
+    else if (inGamesMenu) {
+      if (currentAlarmGame != NONE) {
+        playAlarmGame();
+      } else {
+        drawGamesMenu();
+      }
+    }
+    else if (mainMenuIndex == MENU_CLOCK) drawClockScreen();
+    else if (mainMenuIndex == MENU_ALARM) drawAlarmClockScreen();
+    else if (mainMenuIndex == MENU_GAMES) {
+      display.clearBuffer();
+      display.drawStr(0, 12, "Press to open");
+      display.drawStr(0, 28, "Games menu");
+      display.sendBuffer();
+    }
+  }
+
+  checkAlarm();
+
+  delay(100);
 }
 
-void setAlarmScreen() {
-  static int sel = 0;
-  long val = menuEnc.read() / 4;
-  if (sel == 0) alarmHour = constrain(val % 24, 0, 23);
-  else alarmMinute = constrain(val % 60, 0, 59);
+long readUltrasonicDistance() {
+  digitalWrite(ULTRASONIC_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ULTRASONIC_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ULTRASONIC_TRIG, LOW);
 
-  display.clearBuffer();
-  display.setCursor(0, 20);
-  display.print("Set Alarm Time");
-  display.setCursor(0, 35);
-  display.printf("%02d:%02d", alarmHour, alarmMinute);
-  display.setCursor(0, 50);
-  display.print(sel == 0 ? "> Hour" : "> Min");
-  display.sendBuffer();
+  long duration = pulseIn(ULTRASONIC_ECHO, HIGH, 30000);
+  long distanceCm = duration / 29 / 2;
+  if (distanceCm == 0) distanceCm = 255;
+  return distanceCm;
+}
 
-  if (digitalRead(ENCODER_BTN) == LOW) {
-    delay(300);
-    sel++;
-    menuEnc.write(0);
-    if (sel > 1) {
-      sel = 0;
-      inMenu = true;
+void readJoystick() {
+  xVal = analogRead(JOY_X);
+  yVal = analogRead(JOY_Y);
+  swState = !digitalRead(JOY_SW);
+  unsigned long nowMs = millis();
+
+  if (swState && !buttonPressed && nowMs - lastButtonTime > debounceDelay) {
+    lastButtonTime = nowMs;
+    buttonPressed = true;
+
+    if (alarmActive && !gameCompleted && currentAlarmGame != NONE) {
+      return;
+    }
+
+    if (inAlarmTimeSetting) {
+      if (settingHours) settingHours = false;
+      else {
+        inAlarmTimeSetting = false;
+        inAlarmMenu = true;
+      }
+      return;
+    }
+
+    if (inGamesMenu) {
+      if (gamesMenuIndex == GAME_BACK) {
+        inGamesMenu = false;
+        inMainMenu = true;
+      } else {
+        currentAlarmGame = static_cast<AlarmGame>(gamesMenuIndex + 1);
+        resetGameVars(currentAlarmGame);
+        gameCompleted = false;
+      }
+      return;
+    }
+
+    if (inAlarmMenu) {
+      if (alarmMenuIndex == ALARM_SET_TIME) {
+        inAlarmTimeSetting = true;
+        settingHours = true;
+      } else if (alarmMenuIndex == ALARM_BACK) {
+        inAlarmMenu = false;
+        inMainMenu = true;
+      }
+      return;
+    }
+
+    if (inMainMenu) {
+      switch(mainMenuIndex) {
+        case MENU_CLOCK: inMainMenu = false; break;
+        case MENU_ALARM: inMainMenu = false; inAlarmMenu = true; break;
+        case MENU_GAMES: inMainMenu = false; inGamesMenu = true; break;
+      }
+      return;
+    }
+
+    inMainMenu = true;
+  }
+  if (!swState) buttonPressed = false;
+
+  if (nowMs - lastButtonTime > debounceDelay) {
+    if (inMainMenu) {
+      if (yVal > 700 && mainMenuIndex > 0) mainMenuIndex--;
+      else if (yVal < 300 && mainMenuIndex < mainMenuItems - 1) mainMenuIndex++;
+      lastButtonTime = nowMs;
+    }
+    else if (inAlarmMenu) {
+      if (yVal > 700 && alarmMenuIndex > 0) alarmMenuIndex--;
+      else if (yVal < 300 && alarmMenuIndex < alarmMenuItems - 1) alarmMenuIndex++;
+      lastButtonTime = nowMs;
+    }
+    else if (inGamesMenu && currentAlarmGame == NONE) {
+      if (yVal > 700 && gamesMenuIndex > 0) gamesMenuIndex--;
+      else if (yVal < 300 && gamesMenuIndex < gamesMenuItems - 1) gamesMenuIndex++;
+      lastButtonTime = nowMs;
+    }
+
+    if (inAlarmTimeSetting) {
+      if (xVal > 700) {
+        if (settingHours) alarmHour = (alarmHour + 1) % 24;
+        else alarmMinute = (alarmMinute + 1) % 60;
+        delay(200);
+      }
+      else if (xVal < 300) {
+        if (settingHours) alarmHour = (alarmHour == 0) ? 23 : alarmHour - 1;
+        else alarmMinute = (alarmMinute == 0) ? 59 : alarmMinute - 1;
+        delay(200);
+      }
     }
   }
 }
 
-void mathsGame() {
-  int a = (millis() / 1000) % 10 + 1;
-  int b = (millis() / 700) % 10 + 1;
-  int correct = a + b;
-  int input = menuEnc.read() / 4;
-
-  display.clearBuffer();
-  display.setCursor(0, 20);
-  display.printf("Solve: %d + %d = ?", a, b);
-  display.setCursor(0, 40);
-  display.printf("Ans: %d", input);
-  display.sendBuffer();
-
-  if (digitalRead(ENCODER_BTN) == LOW && input == correct) {
-    puzzleSolved = true;
+void checkAlarm() {
+  if (now.hour() == alarmHour && now.minute() == alarmMinute && now.second() == 0 && !alarmActive) {
+    alarmActive = true;
+    currentAlarmGame = NONE;
+  }
+  if (!alarmActive) {
     noTone(BUZZER_PIN);
   }
 }
 
-void dodgeGame() {
-  static int pos = 2;
-  int x = analogRead(JOY_X);
-  if (x < 400 && pos > 0) pos--;
-  if (x > 600 && pos < 4) pos++;
-  int obstacle = (millis() / 200) % 5;
+void drawMainMenu() {
   display.clearBuffer();
-  display.setCursor(0, 10);
-  display.print("Avoid the X");
-  for (int i = 0; i < 5; i++) {
-    display.setCursor(i * 24, 30);
-    if (i == obstacle) display.print("X");
-    else display.print(" ");
+  display.drawStr(0, 10, mainMenuIndex == MENU_CLOCK ? "> Clock" : "  Clock");
+  display.drawStr(0, 20, mainMenuIndex == MENU_ALARM ? "> Alarm" : "  Alarm");
+  display.drawStr(0, 30, mainMenuIndex == MENU_GAMES ? "> Games" : "  Games");
+  display.sendBuffer();
+}
+
+void drawAlarmMenu() {
+  display.clearBuffer();
+  display.drawStr(0, 10, "Alarm Menu");
+  display.drawStr(0, 20, alarmMenuIndex == ALARM_SET_TIME ? "> Set Alarm Time" : "  Set Alarm Time");
+  display.drawStr(0, 30, alarmMenuIndex == ALARM_BACK ? "> Back" : "  Back");
+  display.sendBuffer();
+}
+
+void drawGamesMenu() {
+  display.clearBuffer();
+  display.drawStr(0, 10, gamesMenuIndex == GAME_MATH ? "> Math Game" : "  Math Game");
+  display.drawStr(0, 20, gamesMenuIndex == GAME_DODGE ? "> Dodge Game" : "  Dodge Game");
+  display.drawStr(0, 30, gamesMenuIndex == GAME_MAZE ? "> Maze Game" : "  Maze Game");
+  display.drawStr(0, 50, gamesMenuIndex == GAME_BACK ? "> Back" : "  Back");
+  display.sendBuffer();
+}
+
+void drawClockScreen() {
+  display.clearBuffer();
+
+  display.setFont(u8g2_font_logisoso32_tf);
+  char timeStr[10];
+  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", now.hour(), now.minute());
+  display.drawStr(0, 40, timeStr);
+
+  display.setFont(u8g2_font_ncenB08_tr);
+  char secondsStr[4];
+  snprintf(secondsStr, sizeof(secondsStr), ":%02d", now.second());
+  display.drawStr(95, 38, secondsStr);
+
+  char dateStr[16];
+  snprintf(dateStr, sizeof(dateStr), "%02d/%02d/%04d", now.day(), now.month(), now.year());
+  display.drawStr(0, 54, dateStr);
+
+  char tempStr[20];
+  dtostrf(temp, 4, 1, tempStr);
+  display.drawStr(0, 64, (String("Temp: ") + tempStr).c_str());
+
+  char humStr[20];
+  dtostrf(humidity, 4, 1, humStr);
+  display.drawStr(64, 64, (String("Hum: ") + humStr).c_str());
+
+  display.sendBuffer();
+}
+
+void drawAlarmClockScreen() {
+  display.clearBuffer();
+  display.drawStr(0, 12, "Alarm Clock");
+
+  char alarmStr[20];
+  snprintf(alarmStr, sizeof(alarmStr), "Alarm: %02d:%02d", alarmHour, alarmMinute);
+  display.drawStr(0, 28, alarmStr);
+
+  if (alarmActive) {
+    display.drawStr(0, 44, "ALARM RINGING!");
+    display.drawStr(0, 60, "Solve game to stop");
+  } else if (inAlarmTimeSetting) {
+    display.drawStr(0, 44, settingHours ? "Set HOUR" : "Set MIN");
+    display.drawStr(0, 60, "Press to next");
+  } else {
+    display.drawStr(0, 44, alarmMenuIndex == ALARM_SET_TIME ? "> Set Alarm Time" : "  Set Alarm Time");
+    display.drawStr(0, 60, alarmMenuIndex == ALARM_BACK ? "> Back" : "  Back");
   }
-  display.setCursor(pos * 24, 50);
-  display.print("O");
-  display.sendBuffer();
 
-  if (pos == obstacle) gameFailed = true;
-  if (puzzleSolved) noTone(BUZZER_PIN);
+  display.sendBuffer();
 }
 
-void mazeGame() {
-  static int px = 0, py = 0;
-  int x = analogRead(JOY_X);
-  int y = analogRead(JOY_Y);
-  if (x < 400 && px > 0) px--;
-  if (x > 600 && px < 7) px++;
-  if (y < 400 && py > 0) py--;
-  if (y > 600 && py < 5) py++;
-  display.clearBuffer();
-  display.setCursor(0, 10);
-  display.print("Exit at (7,5)");
-  display.drawBox(px * 16, py * 8 + 20, 8, 8);
-  display.sendBuffer();
-  if (px == 7 && py == 5) {
-    puzzleSolved = true;
-    noTone(BUZZER_PIN);
+
+void resetGameVars(AlarmGame game) {
+  switch (game) {
+    case MATH:
+      mathNum1 = random(1, 10);
+      mathNum2 = random(1, 10);
+      mathAnswer = mathNum1 + mathNum2;
+      mathUserAnswer = 0;
+      mathStage = 0;
+      break;
+
+    case DODGE:
+      dodgePlayerX = 7;
+      dodgeScore = 0;
+      dodgeLastMove = millis();
+      for (int i = 0; i < maxDodgeBlocks; i++) {
+        dodgeObstacleX[i] = random(0, 15);
+        dodgeObstacleY[i] = random(-8, 0);
+      }
+      break;
+
+    case MAZE:
+      mazePlayerX = 1;
+      mazePlayerY = 1;
+      gameCompleted = false;
+      break;
+
+    default:
+      break;
   }
 }
 
-void gameLoop() {
-  display.clearBuffer();
-  display.setCursor(0, 20);
-  display.print("Game Loaded");
-  display.setCursor(0, 40);
-  display.print("Use joystick to play");
-  display.sendBuffer();
-  delay(1500);
-  inMenu = true;
+void playAlarmGame() {
+  switch (currentAlarmGame) {
+    case MATH: playMathGame(); break;
+    case DODGE: playDodgeGame(); break;
+    case MAZE: playMazeGame(); break;
+    default: break;
+  }
 }
 
-int readDistance() {
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  long duration = pulseIn(ECHO_PIN, HIGH);
-  return duration * 0.034 / 2;
+void playMathGame() {
+  display.clearBuffer();
+  display.setFont(u8g2_font_ncenB08_tr);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Solve: %d + %d =", mathNum1, mathNum2);
+  display.drawStr(0, 12, buf);
+
+  snprintf(buf, sizeof(buf), "Ans: %d", mathUserAnswer);
+  display.drawStr(0, 28, buf);
+  display.drawStr(0, 44, "Press Btn to submit");
+
+  display.sendBuffer();
+
+  if (xVal > 700) {
+    mathUserAnswer++;
+    delay(150);
+  } else if (xVal < 300 && mathUserAnswer > 0) {
+    mathUserAnswer--;
+    delay(150);
+  }
+
+  if (swState && !buttonPressed) {
+    buttonPressed = true;
+    if (mathUserAnswer == mathAnswer) {
+      gameCompleted = true;
+    }
+  }
+  if (!swState) buttonPressed = false;
+}
+
+void playDodgeGame() {
+  display.clearBuffer();
+  display.drawStr(0, 0, "Dodge blocks!");
+  display.drawFrame(0, 12, 128, 48);
+
+  unsigned long nowMs = millis();
+
+  display.drawBox(dodgePlayerX * 8, 56, 8, 8);
+
+  for (int i = 0; i < maxDodgeBlocks; i++) {
+    display.drawBox(dodgeObstacleX[i] * 8, dodgeObstacleY[i] * 8 + 12, 8, 8);
+  }
+
+  display.setCursor(0, 63);
+  display.print("Score: ");
+  display.print(dodgeScore);
+
+  display.sendBuffer();
+
+  if (xVal > 700 && dodgePlayerX < 15) {
+    dodgePlayerX++;
+    delay(150);
+  } else if (xVal < 300 && dodgePlayerX > 0) {
+    dodgePlayerX--;
+    delay(150);
+  }
+
+  if (nowMs - dodgeLastMove > 400) {
+    dodgeLastMove = nowMs;
+    for (int i = 0; i < maxDodgeBlocks; i++) {
+      dodgeObstacleY[i]++;
+      if (dodgeObstacleY[i] > 5) {
+        if (dodgeObstacleX[i] == dodgePlayerX) {
+          // Hit! Fail game & stop alarm
+          gameCompleted = false;
+          alarmActive = false;
+          noTone(BUZZER_PIN);
+          return;
+        } else {
+          dodgeScore++;
+          dodgeObstacleX[i] = random(0, 15);
+          dodgeObstacleY[i] = 0;
+          if (dodgeScore >= dodgeScoreToWin) {
+            gameCompleted = true;
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  if (swState && !buttonPressed) {
+    buttonPressed = true;
+  }
+  if (!swState) buttonPressed = false;
+}
+
+void playMazeGame() {
+  display.clearBuffer();
+
+  for (int y = 0; y < mazeHeight; y++) {
+    for (int x = 0; x < mazeWidth; x++) {
+      int px = x * 8;
+      int py = 10 + y * 8;
+
+      if (mazeMap[y][x] == '#') display.drawBox(px, py, 8, 8);
+      else display.drawFrame(px, py, 8, 8);
+
+      if (x == mazePlayerX && y == mazePlayerY) display.drawStr(px + 2, py + 7, "P");
+      if (x == mazeGoalX && y == mazeGoalY) display.drawStr(px + 2, py + 7, "G");
+    }
+  }
+  display.sendBuffer();
+
+  if (xVal > 700 && canMove(mazePlayerX + 1, mazePlayerY)) {
+    mazePlayerX++;
+    delay(300);
+  } else if (xVal < 300 && canMove(mazePlayerX - 1, mazePlayerY)) {
+    mazePlayerX--;
+    delay(300);
+  } else if (yVal > 700 && canMove(mazePlayerX, mazePlayerY - 1)) {
+    mazePlayerY--;
+    delay(300);
+  } else if (yVal < 300 && canMove(mazePlayerX, mazePlayerY + 1)) {
+    mazePlayerY++;
+    delay(300);
+  }
+
+  if (mazePlayerX == mazeGoalX && mazePlayerY == mazeGoalY) {
+    gameCompleted = true;
+  }
+}
+
+bool canMove(int x, int y) {
+  if (x < 0 || x >= mazeWidth || y < 0 || y >= mazeHeight) return false;
+  return mazeMap[y][x] != '#';
 }
